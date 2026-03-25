@@ -1,21 +1,48 @@
 const BASE_URL = "https://gimlety-persuadably-archie.ngrok-free.dev";
 
-function setLCStatus_(msg) {
-  const sheet = SpreadsheetApp.getActive().getSheetByName("LinnunData");
+const SHEET_NAME = "LinnunData";
 
+// layout
+const STATUS_CELL = "A1";
+
+const DATA_START_ROW = 2; // IMPORTRANGE starts here
+const WEIGHTS_ROW = 3;
+const HEADER_ROW = 4;
+const FIRST_DATA_ROW = 5;
+
+/****************************************************
+ * Helpers
+ ****************************************************/
+
+function getSheet_() {
+  return SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
+}
+
+function setLCStatus_(msg) {
+  const sheet = getSheet_();
   if (!sheet) return;
 
-  sheet.getRange("A2").setValue(msg); // status value
+  sheet.getRange(STATUS_CELL).setValue(msg);
   console.log("setLCStatus_ - " + msg);
 }
 
+/****************************************************
+ * Data push
+ ****************************************************/
+
 function pushLinnunDataToDuckDB() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName("LinnunData");
+  const sheet = getSheet_();
 
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
 
-  const values = sheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
+  const numRows = lastRow - HEADER_ROW + 1;
+
+  if (numRows <= 0) {
+    return { ok: false, code: 0, body: "No data", rows: 0 };
+  }
+
+  const values = sheet.getRange(HEADER_ROW, 1, numRows, lastCol).getValues();
 
   const url = BASE_URL + "/ingest_linnun";
 
@@ -34,13 +61,18 @@ function pushLinnunDataToDuckDB() {
   };
 }
 
+/****************************************************
+ * Weights push
+ ****************************************************/
+
 function pushLinnunWeightsToDuckDB() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName("LinnunData");
+  const sheet = getSheet_();
 
   const lastCol = sheet.getLastColumn();
 
-  const weights = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  const headers = sheet.getRange(3, 1, 1, lastCol).getValues()[0];
+  const weights = sheet.getRange(WEIGHTS_ROW, 1, 1, lastCol).getValues()[0];
+
+  const headers = sheet.getRange(HEADER_ROW, 1, 1, lastCol).getValues()[0];
 
   const profile = "Linnun";
   const mode = "attributes";
@@ -60,21 +92,15 @@ function pushLinnunWeightsToDuckDB() {
     const attr = String(headers[i]).trim();
     const raw = weights[i];
 
-    if (!attr) {
-      continue;
-    }
+    if (!attr) continue;
 
     total++;
 
-    if (raw === "" || raw === null) {
-      continue;
-    }
+    if (raw === "" || raw === null) continue;
 
     const value = Number(String(raw).replace(/,/g, ""));
 
-    if (isNaN(value) || value === 0) {
-      continue; // 👈 skip zero weights
-    }
+    if (isNaN(value) || value === 0) continue;
 
     rows.push([profile, mode, attr, value]);
   }
@@ -99,6 +125,10 @@ function pushLinnunWeightsToDuckDB() {
   };
 }
 
+/****************************************************
+ * Full refresh
+ ****************************************************/
+
 function refreshLinnunDuckDB() {
   setLCStatus_("⏳ Full refresh started " + new Date());
   SpreadsheetApp.flush();
@@ -122,9 +152,13 @@ function refreshLinnunDuckDB() {
   }
 
   setLCStatus_(
-    `✅ Refresh OK: ${data.rows} rows, ${weights.pushed}/${weights.total} weights`,
+    `✅ Refresh DuckDB OK: ${data.rows} rows, ${weights.pushed}/${weights.total} weights`,
   );
 }
+
+/****************************************************
+ * Weights only
+ ****************************************************/
 
 function pushWeightsOnly() {
   setLCStatus_("⏳ Pushing weights only...");
@@ -139,6 +173,10 @@ function pushWeightsOnly() {
 
   setLCStatus_(`✅ Weights OK: ${weights.pushed}/${weights.total}`);
 }
+
+/****************************************************
+ * Efficiency load
+ ****************************************************/
 
 function loadEfficiency() {
   const url = BASE_URL + "/efficiency?profile=TedMilitary";
@@ -170,4 +208,3 @@ function loadEfficiency() {
   // rows already aligned
   sheet.getRange(2, 1, rows.length, columns.length).setValues(rows);
 }
-
