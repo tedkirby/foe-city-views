@@ -63,6 +63,18 @@ const BaseSheet = {
       .getRange(this.layout.headerRow, 1, numRows, this.getLastCol())
       .getValues();
   },
+
+  setStatus(msg) {
+    const ts = Utilities.formatDate(
+      new Date(),
+      Session.getScriptTimeZone(),
+      "yyyy-MM-dd HH:mm:ss",
+    );
+    this.getSheet()
+      .getRange(this.layout.statusCell)
+      .setValue(msg + " at " + ts);
+    console.log("Status:", msg);
+  },
 };
 
 /****************************************************
@@ -151,18 +163,6 @@ LinnunData.getAttributeOrder = function () {
   }
 
   return headers.slice(startIdx, endIdx);
-};
-
-LinnunData.setStatus = function (msg) {
-  const ts = Utilities.formatDate(
-    new Date(),
-    Session.getScriptTimeZone(),
-    "yyyy-MM-dd HH:mm:ss",
-  );
-  this.getSheet()
-    .getRange(this.layout.statusCell)
-    .setValue(msg + " at " + ts);
-  console.log("Status:", msg);
 };
 
 /****************************************************
@@ -264,7 +264,7 @@ const EfficiencyView = createSheet(
   "EfficiencyView",
   {
     profileCell: "C2",
-    rankModeCell: "E2",
+    statusCell: "D2",
     headerRow: 3,
     dataStartRow: 4,
   },
@@ -281,18 +281,8 @@ EfficiencyView.columns = [
   { key: "total_weight", label: "Weight" },
 ];
 
-EfficiencyView.rankMap = {
-  Combined: "combined_rank",
-  Efficiency: "efficiency_rank",
-  Linnun: "linnun_rank",
-};
-
 EfficiencyView.getProfile = function () {
   return this.getSheet().getRange(this.layout.profileCell).getValue();
-};
-
-EfficiencyView.getRankMode = function () {
-  return this.getSheet().getRange(this.layout.rankModeCell).getValue();
 };
 
 /****************************************************
@@ -301,11 +291,14 @@ EfficiencyView.getRankMode = function () {
 
 function loadEfficiency() {
   const profile = EfficiencyView.getProfile() || "TedMilitary";
-  const mode = EfficiencyView.getRankMode() || "Combined";
 
   if (!profile) {
     throw new Error("No profile selected");
   }
+
+  EfficiencyView.setStatus("⏳ Fetching data...");
+  SpreadsheetApp.flush(); // 👈 important (forces UI update)
+  Utilities.sleep(50); // 👈 magic line
 
   const json = Api.fetchJson(
     `/efficiency?profile=${encodeURIComponent(profile)}`,
@@ -314,6 +307,10 @@ function loadEfficiency() {
   if (json.status !== "ok") {
     throw new Error("API error");
   }
+
+  EfficiencyView.setStatus("⏳ Processing...");
+  SpreadsheetApp.flush();
+  Utilities.sleep(50);
 
   const { columns, rows } = json;
 
@@ -335,23 +332,6 @@ function loadEfficiency() {
   );
 
   Logger.log(indexMap);
-
-  // -----------------------------
-  // Determine sort column
-  // -----------------------------
-  const sortKey = EfficiencyView.rankMap[mode] || "combined_rank";
-
-  const sortIndex = EfficiencyView.columns.findIndex((c) => c.key === sortKey);
-
-  // Defensive (should never happen, but safe)
-  if (sortIndex === -1) {
-    throw new Error(`Sort column not found: ${sortKey}`);
-  }
-
-  // -----------------------------
-  // Sort rows
-  // -----------------------------
-  orderedRows.sort((a, b) => a[sortIndex] - b[sortIndex]);
 
   // -----------------------------
   // Headers
@@ -385,8 +365,10 @@ function loadEfficiency() {
       .setValues(orderedRows);
   }
 
+  EfficiencyView.setStatus("✅ Done");
+
   console.log(
-    `Efficiency loaded: ${orderedRows.length} rows | profile=${profile} | mode=${mode}`,
+    `Efficiency loaded: ${orderedRows.length} rows | profile=${profile}`,
   );
 }
 
@@ -435,4 +417,42 @@ function loadConfigWeights() {
 
   ConfigWeights.write(headers, output);
   ConfigWeights.formatNumbers(output.length, profiles.length);
+}
+
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("City Engine")
+    .addItem("Refresh Efficiency", "loadEfficiency")
+    .addItem("Load Config Weights", "loadConfigWeights")
+    .addToUi();
+
+  // Optional: auto-load
+  try {
+    loadEfficiency();
+  } catch (err) {
+    console.error(err);
+  }
+
+  try {
+    loadConfigWeights();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+// install this trigger in AppScript left side panel
+function handleEdit(e) {
+  const sheet = e.range.getSheet();
+
+  if (sheet.getName() !== "EfficiencyView") return;
+
+  const cell = e.range.getA1Notation();
+
+  // Profile selector
+  if (cell === EfficiencyView.layout.profileCell) {
+    if (!e.value) return; // ignore clears
+    console.log("Profile changed → reloading efficiency");
+    loadEfficiency();
+    return;
+  }
 }
