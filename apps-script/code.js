@@ -208,3 +208,134 @@ function loadEfficiency() {
   // rows already aligned
   sheet.getRange(2, 1, rows.length, columns.length).setValues(rows);
 }
+
+function getAttributeOrder_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName("LinnunData");
+
+  if (!sheet) {
+    throw new Error("LinnunData sheet not found");
+  }
+
+  const lastCol = sheet.getLastColumn();
+
+  const headers = sheet.getRange(HEADER_ROW, 1, 1, lastCol).getValues()[0];
+
+  const startIdx = headers.indexOf("FP");
+  const endIdx = headers.indexOf("Items/Fragments");
+
+  if (startIdx === -1 || endIdx === -1) {
+    throw new Error(
+      "Could not find FP or Items/Fragments in LinnunData headers",
+    );
+  }
+
+  return headers.slice(startIdx, endIdx);
+}
+
+function loadConfigWeights() {
+  const url = BASE_URL + "/config_weights";
+
+  const res = UrlFetchApp.fetch(url, {
+    headers: { "ngrok-skip-browser-warning": "true" },
+  });
+
+  const text = res.getContentText();
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("Invalid JSON:\n" + text);
+  }
+
+  const rows = json.rows; // [profile, mode, attribute, weight]
+
+  const sheet = SpreadsheetApp.getActive().getSheetByName("ConfigWeights");
+
+  if (!sheet) {
+    throw new Error("ConfigWeights sheet not found");
+  }
+
+  // -----------------------------
+  // Build profile list (columns)
+  // -----------------------------
+  const profiles = [...new Set(rows.map((r) => r[0]))];
+
+  // -----------------------------
+  // Build lookup map
+  // -----------------------------
+  const lookup = {};
+  rows.forEach(([profile, mode, attr, weight]) => {
+    lookup[`${profile}|${attr}`] = weight;
+  });
+
+  // -----------------------------
+  // Get canonical attribute order
+  // -----------------------------
+  const ATTRIBUTE_ORDER = getAttributeOrder_();
+
+  const attributeSet = new Set(ATTRIBUTE_ORDER);
+
+  // -----------------------------
+  // Separate items
+  // -----------------------------
+  const itemNames = [
+    ...new Set(rows.filter((r) => r[1] === "items").map((r) => r[2])),
+  ]
+    .filter((name) => !attributeSet.has(name))
+    .sort();
+
+  // -----------------------------
+  // Build output matrix
+  // -----------------------------
+  const output = [];
+
+  // Attributes first (ordered)
+  ATTRIBUTE_ORDER.forEach((attr) => {
+    const row = [attr];
+
+    profiles.forEach((profile) => {
+      row.push(lookup[`${profile}|${attr}`] || "");
+    });
+
+    output.push(row);
+  });
+
+  // Then items
+  itemNames.forEach((attr) => {
+    const row = [attr];
+
+    profiles.forEach((profile) => {
+      row.push(lookup[`${profile}|${attr}`] || "");
+    });
+
+    output.push(row);
+  });
+
+  // -----------------------------
+  // Headers
+  // -----------------------------
+  const headers = ["Attribute", ...profiles];
+
+  // -----------------------------
+  // Write to sheet
+  // -----------------------------
+  sheet.clearContents();
+
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+
+  sheet.getRange(2, 1, output.length, headers.length).setValues(output);
+
+  // -----------------------------
+  // Formatting (commas!)
+  // -----------------------------
+  if (profiles.length > 0 && output.length > 0) {
+    sheet
+      .getRange(2, 2, output.length, profiles.length)
+      .setNumberFormat("#,##0.####");
+  }
+
+  console.log(
+    `ConfigWeights loaded: ${output.length} rows, ${profiles.length} profiles`,
+  );
+}
