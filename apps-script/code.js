@@ -1,52 +1,185 @@
-const BASE_URL = "https://gimlety-persuadably-archie.ngrok-free.dev";
-
-const SHEET_NAME = "LinnunData";
-
-// layout
-const STATUS_CELL = "A1";
-
-const DATA_START_ROW = 2; // IMPORTRANGE starts here
-const WEIGHTS_ROW = 3;
-const HEADER_ROW = 4;
-const FIRST_DATA_ROW = 5;
-
 /****************************************************
- * Helpers
+ * API
  ****************************************************/
 
-function getSheet_() {
-  return SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
-}
+const Api = {
+  baseUrl: "https://gimlety-persuadably-archie.ngrok-free.dev",
 
-function setLCStatus_(msg) {
-  const sheet = getSheet_();
-  if (!sheet) return;
+  getUrl(path) {
+    if (!path.startsWith("/")) path = "/" + path;
+    return this.baseUrl + path;
+  },
 
-  sheet.getRange(STATUS_CELL).setValue(msg);
-  console.log("setLCStatus_ - " + msg);
+  fetchJson(path) {
+    const res = UrlFetchApp.fetch(this.getUrl(path), {
+      headers: { "ngrok-skip-browser-warning": "true" },
+    });
+
+    const text = res.getContentText();
+
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error("Invalid JSON:\n" + text);
+    }
+  },
+};
+
+/****************************************************
+ * Base Sheet
+ ****************************************************/
+
+const BaseSheet = {
+  getSheet() {
+    const sheet = SpreadsheetApp.getActive().getSheetByName(this.name);
+
+    if (!sheet) {
+      throw new Error(`Sheet not found: ${this.name}`);
+    }
+
+    return sheet;
+  },
+
+  getLastCol() {
+    return this.getSheet().getLastColumn();
+  },
+
+  getLastRow() {
+    return this.getSheet().getLastRow();
+  },
+
+  getHeaders() {
+    return this.getSheet()
+      .getRange(this.layout.headerRow, 1, 1, this.getLastCol())
+      .getValues()[0];
+  },
+
+  getDataBlock() {
+    const numRows = this.getLastRow() - this.layout.headerRow + 1;
+
+    if (numRows <= 0) return [];
+
+    return this.getSheet()
+      .getRange(this.layout.headerRow, 1, numRows, this.getLastCol())
+      .getValues();
+  },
+};
+
+/****************************************************
+ * Read / Write Sheets
+ ****************************************************/
+
+const ReadOnlySheet = Object.create(BaseSheet);
+
+const WritableSheet = Object.create(BaseSheet);
+
+WritableSheet.clear = function () {
+  this.getSheet().clearContents();
+};
+
+WritableSheet.write = function (headers, rows, startRow = 1) {
+  const sheet = this.getSheet();
+
+  sheet.clearContents();
+
+  sheet.getRange(startRow, 1, 1, headers.length).setValues([headers]);
+
+  if (rows.length > 0) {
+    sheet
+      .getRange(startRow + 1, 1, rows.length, headers.length)
+      .setValues(rows);
+  }
+};
+
+WritableSheet.formatNumbers = function (
+  rowCount,
+  colCount,
+  startRow = 2,
+  startCol = 2,
+) {
+  if (rowCount <= 0 || colCount <= 0) return;
+
+  this.getSheet()
+    .getRange(startRow, startCol, rowCount, colCount)
+    .setNumberFormat("#,##0.####");
+};
+
+/****************************************************
+ * Factory
+ ****************************************************/
+
+function createSheet(name, layout = {}, type = "read") {
+  const base = type === "write" ? WritableSheet : ReadOnlySheet;
+
+  const obj = Object.create(base);
+  obj.name = name;
+  obj.layout = layout;
+
+  return obj;
 }
 
 /****************************************************
- * Data push
+ * Sheet Definitions
+ ****************************************************/
+
+const LinnunData = createSheet(
+  "LinnunData",
+  {
+    statusCell: "A1",
+    weightsRow: 3,
+    headerRow: 4,
+    attrStart: "FP",
+    attrEnd: "Items/Fragments",
+  },
+  "read",
+);
+
+LinnunData.getWeights = function () {
+  return this.getSheet()
+    .getRange(this.layout.weightsRow, 1, 1, this.getLastCol())
+    .getValues()[0];
+};
+
+LinnunData.getAttributeOrder = function () {
+  const headers = this.getHeaders();
+
+  const startIdx = headers.indexOf(this.layout.attrStart);
+  const endIdx = headers.indexOf(this.layout.attrEnd);
+
+  if (startIdx === -1 || endIdx === -1) {
+    throw new Error("Attribute bounds not found");
+  }
+
+  return headers.slice(startIdx, endIdx);
+};
+
+LinnunData.setStatus = function (msg) {
+  const ts = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone(),
+    "yyyy-MM-dd HH:mm:ss",
+  );
+  this.getSheet()
+    .getRange(this.layout.statusCell)
+    .setValue(msg + " at " + ts);
+  console.log("Status:", msg);
+};
+
+const ConfigWeights = createSheet("ConfigWeights", {}, "write");
+const EfficiencyView = createSheet("EfficiencyView", {}, "write");
+
+/****************************************************
+ * Data Push
  ****************************************************/
 
 function pushLinnunDataToDuckDB() {
-  const sheet = getSheet_();
+  const values = LinnunData.getDataBlock();
 
-  const lastRow = sheet.getLastRow();
-  const lastCol = sheet.getLastColumn();
-
-  const numRows = lastRow - HEADER_ROW + 1;
-
-  if (numRows <= 0) {
-    return { ok: false, code: 0, body: "No data", rows: 0 };
+  if (!values.length) {
+    return { ok: false, body: "No data", rows: 0 };
   }
 
-  const values = sheet.getRange(HEADER_ROW, 1, numRows, lastCol).getValues();
-
-  const url = BASE_URL + "/ingest_linnun";
-
-  const res = UrlFetchApp.fetch(url, {
+  const res = UrlFetchApp.fetch(Api.getUrl("/ingest_linnun"), {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify({ rows: values }),
@@ -62,280 +195,129 @@ function pushLinnunDataToDuckDB() {
 }
 
 /****************************************************
- * Weights push
+ * Weights Push
  ****************************************************/
 
 function pushLinnunWeightsToDuckDB() {
-  const sheet = getSheet_();
-
-  const lastCol = sheet.getLastColumn();
-
-  const weights = sheet.getRange(WEIGHTS_ROW, 1, 1, lastCol).getValues()[0];
-
-  const headers = sheet.getRange(HEADER_ROW, 1, 1, lastCol).getValues()[0];
-
-  const profile = "Linnun";
-  const mode = "attributes";
+  const headers = LinnunData.getHeaders();
+  const weights = LinnunData.getWeights();
 
   const startIdx = headers.indexOf("FP");
   const endIdx = headers.indexOf("Items/Fragments");
 
   if (startIdx === -1 || endIdx === -1) {
-    setLCStatus_("❌ Could not find FP or Items/Fragments");
+    LinnunData.setStatus("❌ Could not find attribute boundaries");
     return { ok: false };
   }
 
   const rows = [];
-  let total = 0;
 
   for (let i = startIdx; i < endIdx; i++) {
     const attr = String(headers[i]).trim();
     const raw = weights[i];
 
     if (!attr) continue;
-
-    total++;
-
     if (raw === "" || raw === null) continue;
 
     const value = Number(String(raw).replace(/,/g, ""));
-
     if (isNaN(value) || value === 0) continue;
 
-    rows.push([profile, mode, attr, value]);
+    rows.push(["Linnun", "attributes", attr, value]);
   }
 
-  const url = BASE_URL + "/ingest_weights";
-
-  const res = UrlFetchApp.fetch(url, {
+  const res = UrlFetchApp.fetch(Api.getUrl("/ingest_weights"), {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify({ rows }),
     muteHttpExceptions: true,
   });
 
-  const ok = res.getResponseCode() === 200;
-
   return {
-    ok,
+    ok: res.getResponseCode() === 200,
     code: res.getResponseCode(),
     body: res.getContentText(),
     pushed: rows.length,
-    total,
   };
 }
 
 /****************************************************
- * Full refresh
+ * Refresh
  ****************************************************/
 
 function refreshLinnunDuckDB() {
-  setLCStatus_("⏳ Full refresh started " + new Date());
+  LinnunData.setStatus("⏳ Refresh started " + new Date());
   SpreadsheetApp.flush();
 
   const data = pushLinnunDataToDuckDB();
-
   if (!data.ok) {
-    setLCStatus_(`❌ Data push failed (${data.code}): ${data.body}`);
+    LinnunData.setStatus("❌ Data push to DuckDB failed");
     return;
   }
-
-  setLCStatus_(`⏳ Data OK (${data.rows} rows), pushing weights...`);
 
   const weights = pushLinnunWeightsToDuckDB();
-
   if (!weights.ok) {
-    setLCStatus_(
-      `⚠️ Data OK (${data.rows}), weights failed (${weights.code}): ${weights.body}`,
-    );
+    LinnunData.setStatus("⚠️ Weights failed");
     return;
   }
 
-  setLCStatus_(
-    `✅ Refresh DuckDB OK: ${data.rows} rows, ${weights.pushed}/${weights.total} weights`,
-  );
+  LinnunData.setStatus("✅ Refresh DuckDB OK");
 }
 
 /****************************************************
- * Weights only
- ****************************************************/
-
-function pushWeightsOnly() {
-  setLCStatus_("⏳ Pushing weights only...");
-  SpreadsheetApp.flush();
-
-  const weights = pushLinnunWeightsToDuckDB();
-
-  if (!weights.ok) {
-    setLCStatus_(`❌ Weights failed (${weights.code}): ${weights.body}`);
-    return;
-  }
-
-  setLCStatus_(`✅ Weights OK: ${weights.pushed}/${weights.total}`);
-}
-
-/****************************************************
- * Efficiency load
+ * Efficiency Load
  ****************************************************/
 
 function loadEfficiency() {
-  const url = BASE_URL + "/efficiency?profile=TedMilitary";
-
-  const response = UrlFetchApp.fetch(url, {
-    headers: { "ngrok-skip-browser-warning": "true" },
-  });
-
-  const json = JSON.parse(response.getContentText());
+  const json = Api.fetchJson("/efficiency?profile=TedMilitary");
 
   if (json.status !== "ok") {
     throw new Error("API error");
   }
 
-  const { columns, rows } = json;
-
-  console.log(columns);
-
-  if (!rows.length) return;
-
-  const sheet =
-    SpreadsheetApp.getActiveSpreadsheet().getSheetByName("EfficiencyView");
-
-  sheet.clearContents();
-
-  // headers from backend (ordered)
-  sheet.getRange(1, 1, 1, columns.length).setValues([columns]);
-
-  // rows already aligned
-  sheet.getRange(2, 1, rows.length, columns.length).setValues(rows);
+  EfficiencyView.write(json.columns, json.rows);
 }
 
-function getAttributeOrder_() {
-  const sheet = SpreadsheetApp.getActive().getSheetByName("LinnunData");
-
-  if (!sheet) {
-    throw new Error("LinnunData sheet not found");
-  }
-
-  const lastCol = sheet.getLastColumn();
-
-  const headers = sheet.getRange(HEADER_ROW, 1, 1, lastCol).getValues()[0];
-
-  const startIdx = headers.indexOf("FP");
-  const endIdx = headers.indexOf("Items/Fragments");
-
-  if (startIdx === -1 || endIdx === -1) {
-    throw new Error(
-      "Could not find FP or Items/Fragments in LinnunData headers",
-    );
-  }
-
-  return headers.slice(startIdx, endIdx);
-}
+/****************************************************
+ * Config Weights Load
+ ****************************************************/
 
 function loadConfigWeights() {
-  const url = BASE_URL + "/config_weights";
+  const json = Api.fetchJson("/config_weights");
 
-  const res = UrlFetchApp.fetch(url, {
-    headers: { "ngrok-skip-browser-warning": "true" },
-  });
+  const rows = json.rows;
 
-  const text = res.getContentText();
-
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch (e) {
-    throw new Error("Invalid JSON:\n" + text);
-  }
-
-  const rows = json.rows; // [profile, mode, attribute, weight]
-
-  const sheet = SpreadsheetApp.getActive().getSheetByName("ConfigWeights");
-
-  if (!sheet) {
-    throw new Error("ConfigWeights sheet not found");
-  }
-
-  // -----------------------------
-  // Build profile list (columns)
-  // -----------------------------
   const profiles = [...new Set(rows.map((r) => r[0]))];
 
-  // -----------------------------
-  // Build lookup map
-  // -----------------------------
   const lookup = {};
   rows.forEach(([profile, mode, attr, weight]) => {
     lookup[`${profile}|${attr}`] = weight;
   });
 
-  // -----------------------------
-  // Get canonical attribute order
-  // -----------------------------
-  const ATTRIBUTE_ORDER = getAttributeOrder_();
-
+  const ATTRIBUTE_ORDER = LinnunData.getAttributeOrder();
   const attributeSet = new Set(ATTRIBUTE_ORDER);
 
-  // -----------------------------
-  // Separate items
-  // -----------------------------
   const itemNames = [
     ...new Set(rows.filter((r) => r[1] === "items").map((r) => r[2])),
   ]
-    .filter((name) => !attributeSet.has(name))
+    .filter((n) => !attributeSet.has(n))
     .sort();
 
-  // -----------------------------
-  // Build output matrix
-  // -----------------------------
   const output = [];
 
-  // Attributes first (ordered)
   ATTRIBUTE_ORDER.forEach((attr) => {
     const row = [attr];
-
-    profiles.forEach((profile) => {
-      row.push(lookup[`${profile}|${attr}`] || "");
-    });
-
+    profiles.forEach((p) => row.push(lookup[`${p}|${attr}`] || ""));
     output.push(row);
   });
 
-  // Then items
   itemNames.forEach((attr) => {
     const row = [attr];
-
-    profiles.forEach((profile) => {
-      row.push(lookup[`${profile}|${attr}`] || "");
-    });
-
+    profiles.forEach((p) => row.push(lookup[`${p}|${attr}`] || ""));
     output.push(row);
   });
 
-  // -----------------------------
-  // Headers
-  // -----------------------------
   const headers = ["Attribute", ...profiles];
 
-  // -----------------------------
-  // Write to sheet
-  // -----------------------------
-  sheet.clearContents();
-
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-
-  sheet.getRange(2, 1, output.length, headers.length).setValues(output);
-
-  // -----------------------------
-  // Formatting (commas!)
-  // -----------------------------
-  if (profiles.length > 0 && output.length > 0) {
-    sheet
-      .getRange(2, 2, output.length, profiles.length)
-      .setNumberFormat("#,##0.####");
-  }
-
-  console.log(
-    `ConfigWeights loaded: ${output.length} rows, ${profiles.length} profiles`,
-  );
+  ConfigWeights.write(headers, output);
+  ConfigWeights.formatNumbers(output.length, profiles.length);
 }
