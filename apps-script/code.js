@@ -165,9 +165,6 @@ LinnunData.setStatus = function (msg) {
   console.log("Status:", msg);
 };
 
-const ConfigWeights = createSheet("ConfigWeights", {}, "write");
-const EfficiencyView = createSheet("EfficiencyView", {}, "write");
-
 /****************************************************
  * Data Push
  ****************************************************/
@@ -263,19 +260,137 @@ function refreshLinnunDuckDB() {
   LinnunData.setStatus("✅ Refresh DuckDB OK");
 }
 
+const EfficiencyView = createSheet(
+  "EfficiencyView",
+  {
+    profileCell: "C2",
+    rankModeCell: "E2",
+    headerRow: 3,
+    dataStartRow: 4,
+  },
+  "write",
+);
+
+EfficiencyView.columns = [
+  { key: "Building", label: "Building" },
+  { key: "linnun_rank", label: "Linnun" },
+  { key: "efficiency_rank", label: "Efficiency" },
+  { key: "combined_rank", label: "Combined" },
+  { key: "ln_efficiency", label: "Ln Eff" },
+  { key: "efficiency", label: "Efficiency" },
+  { key: "total_weight", label: "Weight" },
+];
+
+EfficiencyView.rankMap = {
+  Combined: "combined_rank",
+  Efficiency: "efficiency_rank",
+  Linnun: "linnun_rank",
+};
+
+EfficiencyView.getProfile = function () {
+  return this.getSheet().getRange(this.layout.profileCell).getValue();
+};
+
+EfficiencyView.getRankMode = function () {
+  return this.getSheet().getRange(this.layout.rankModeCell).getValue();
+};
+
 /****************************************************
  * Efficiency Load
  ****************************************************/
 
 function loadEfficiency() {
-  const json = Api.fetchJson("/efficiency?profile=TedMilitary");
+  const profile = EfficiencyView.getProfile() || "TedMilitary";
+  const mode = EfficiencyView.getRankMode() || "Combined";
+
+  if (!profile) {
+    throw new Error("No profile selected");
+  }
+
+  const json = Api.fetchJson(
+    `/efficiency?profile=${encodeURIComponent(profile)}`,
+  );
 
   if (json.status !== "ok") {
     throw new Error("API error");
   }
 
-  EfficiencyView.write(json.columns, json.rows);
+  const { columns, rows } = json;
+
+  Logger.log(columns);
+
+  // -----------------------------
+  // Build column index map
+  // -----------------------------
+  const indexMap = {};
+  columns.forEach((c, i) => {
+    indexMap[c] = i;
+  });
+
+  // -----------------------------
+  // Reorder rows using view schema
+  // -----------------------------
+  const orderedRows = rows.map((row) =>
+    EfficiencyView.columns.map((c) => row[indexMap[c.key]]),
+  );
+
+  Logger.log(indexMap);
+
+  // -----------------------------
+  // Determine sort column
+  // -----------------------------
+  const sortKey = EfficiencyView.rankMap[mode] || "combined_rank";
+
+  const sortIndex = EfficiencyView.columns.findIndex((c) => c.key === sortKey);
+
+  // Defensive (should never happen, but safe)
+  if (sortIndex === -1) {
+    throw new Error(`Sort column not found: ${sortKey}`);
+  }
+
+  // -----------------------------
+  // Sort rows
+  // -----------------------------
+  orderedRows.sort((a, b) => a[sortIndex] - b[sortIndex]);
+
+  // -----------------------------
+  // Headers
+  // -----------------------------
+  const headers = EfficiencyView.columns.map((c) => c.label);
+
+  // -----------------------------
+  // Write to sheet (preserve selectors)
+  // -----------------------------
+  const sheet = EfficiencyView.getSheet();
+
+  const headerRow = EfficiencyView.layout.headerRow;
+  const dataStart = EfficiencyView.layout.dataStartRow;
+
+  const lastRow = sheet.getLastRow();
+
+  // Clear only output area
+  if (lastRow >= headerRow) {
+    sheet
+      .getRange(headerRow, 1, lastRow - headerRow + 1, sheet.getLastColumn())
+      .clearContent();
+  }
+
+  // Write headers
+  sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+
+  // Write data
+  if (orderedRows.length > 0) {
+    sheet
+      .getRange(dataStart, 1, orderedRows.length, headers.length)
+      .setValues(orderedRows);
+  }
+
+  console.log(
+    `Efficiency loaded: ${orderedRows.length} rows | profile=${profile} | mode=${mode}`,
+  );
 }
+
+const ConfigWeights = createSheet("ConfigWeights", {}, "write");
 
 /****************************************************
  * Config Weights Load
