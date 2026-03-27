@@ -263,10 +263,10 @@ function refreshLinnunDuckDB() {
 const EfficiencyView = createSheet(
   "EfficiencyView",
   {
-    profileCell: "C2",
-    statusCell: "D2",
-    headerRow: 3,
-    dataStartRow: 4,
+    profileCell: "B1",
+    statusCell: "F1",
+    headerRow: 2,
+    dataStartRow: 3,
   },
   "write",
 );
