@@ -273,6 +273,7 @@ const EfficiencyView = createSheet(
 
 EfficiencyView.columns = [
   { key: "Building", label: "Building" },
+  { key: "Event", label: "Event" },
   { key: "linnun_rank", label: "Linnun" },
   { key: "efficiency_rank", label: "Efficiency" },
   { key: "combined_rank", label: "Combined" },
