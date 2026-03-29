@@ -280,6 +280,8 @@ EfficiencyView.columns = [
   { key: "ln_efficiency", label: "Ln Eff" },
   { key: "efficiency", label: "Efficiency" },
   { key: "total_weight", label: "Weight" },
+  { key: "ln_I_F_Value", label: "Ln I/F" },
+  { key: "I_F_Value", label: "I/F Value" },
 ];
 
 EfficiencyView.getProfile = function () {
