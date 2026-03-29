@@ -289,7 +289,6 @@ EfficiencyView.getProfile = function () {
 /****************************************************
  * Efficiency Load
  ****************************************************/
-
 function loadEfficiency() {
   const profile = EfficiencyView.getProfile() || "TedMilitary";
 
@@ -313,7 +312,7 @@ function loadEfficiency() {
   SpreadsheetApp.flush();
   Utilities.sleep(50);
 
-  const { columns, rows } = json;
+  const { columns, rows, weights } = json;
 
   Logger.log(columns);
 
@@ -326,21 +325,50 @@ function loadEfficiency() {
   });
 
   // -----------------------------
-  // Reorder rows using view schema
+  // Base columns (fixed)
   // -----------------------------
-  const orderedRows = rows.map((row) =>
-    EfficiencyView.columns.map((c) => row[indexMap[c.key]]),
-  );
+  const baseColumns = EfficiencyView.columns;
+  const baseKeys = baseColumns.map((c) => c.key);
 
-  Logger.log(indexMap);
+  // -----------------------------
+  // Dynamic attribute columns
+  // -----------------------------
+  const attrColumns = columns
+    .filter((c) => !baseKeys.includes(c))
+    .map((attr) => ({
+      key: attr,
+      label: attr,
+    }));
+
+  const allColumns = baseColumns.concat(attrColumns);
 
   // -----------------------------
   // Headers
   // -----------------------------
-  const headers = EfficiencyView.columns.map((c) => c.label);
+  const headers = allColumns.map((c) => c.label);
 
   // -----------------------------
-  // Write to sheet (preserve selectors)
+  // Weight row (row 2)
+  // -----------------------------
+  const weightRow = allColumns.map((c) => {
+    if (weights && weights[c.key] !== undefined) {
+      return weights[c.key];
+    }
+    return "";
+  });
+
+  // -----------------------------
+  // Map rows
+  // -----------------------------
+  const orderedRows = rows.map((row) =>
+    allColumns.map((c) => {
+      const idx = indexMap[c.key];
+      return idx !== undefined ? row[idx] : "";
+    }),
+  );
+
+  // -----------------------------
+  // Write to sheet
   // -----------------------------
   const sheet = EfficiencyView.getSheet();
 
@@ -348,18 +376,22 @@ function loadEfficiency() {
   const dataStart = EfficiencyView.layout.dataStartRow;
 
   const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
 
-  // Clear only output area
+  // Clear output area
   if (lastRow >= headerRow) {
     sheet
-      .getRange(headerRow, 1, lastRow - headerRow + 1, sheet.getLastColumn())
+      .getRange(headerRow, 1, lastRow - headerRow + 1, lastCol)
       .clearContent();
   }
 
-  // Write headers
+  // Row 2 → weights
+  sheet.getRange(headerRow - 1, 1, 1, headers.length).setValues([weightRow]);
+
+  // Row 3 → headers
   sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
 
-  // Write data
+  // Data
   if (orderedRows.length > 0) {
     sheet
       .getRange(dataStart, 1, orderedRows.length, headers.length)
